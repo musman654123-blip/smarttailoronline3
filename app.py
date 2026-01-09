@@ -1,19 +1,33 @@
-from flask import Flask, render_template, request, redirect
-import sqlite3, os
+from flask import Flask, request, redirect, session, render_template_string
+import sqlite3
 from datetime import datetime
 
 app = Flask(__name__)
-app.secret_key = "smart-tailor-secret"
+app.secret_key = "SMARTTAILOR_SECRET"
+
+DB = "tailor.db"
+ADMIN_PASSWORD = "admin123"
 
 # =========================
-# DATABASE INIT FUNCTION
+# DATABASE
 # =========================
 def init_db():
-    con = sqlite3.connect("tailor.db")
+    con = sqlite3.connect(DB)
     cur = con.cursor()
+
     cur.execute("""
-    CREATE TABLE IF NOT EXISTS customers (
+    CREATE TABLE IF NOT EXISTS licenses(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tailor_name TEXT,
+        license_key TEXT UNIQUE,
+        active INTEGER
+    )
+    """)
+
+    cur.execute("""
+    CREATE TABLE IF NOT EXISTS customers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        license_key TEXT,
         name TEXT,
         phone TEXT,
         length TEXT,
@@ -21,284 +35,281 @@ def init_db():
         waist TEXT,
         shoulder TEXT,
         sleeve TEXT,
-        collar TEXT,
-        front TEXT,
-        back TEXT,
-        pocket TEXT,
+        side_pocket TEXT,
+        shalwar_pocket TEXT,
         cuff TEXT,
-        plate TEXT,
-        button TEXT,
+        collar TEXT,
+        shalwar_length TEXT,
+        zip TEXT,
+        poncha TEXT,
         note TEXT,
         date TEXT
     )
     """)
-    con.commit()
-    con.close()
-
-# ✅ NOW CALL IT (AFTER DEFINITION)
-init_db()
-
-# ================= CONFIG =================
-app = Flask(__name__)
-app.secret_key = "SMART-TAILOR-SECURE-KEY"
-
-DB_FILE = "data.db"
-ADMIN_PASSWORD = "admin123"
-
-# ================= DATABASE =================
-def db():
-    conn = sqlite3.connect(DB_FILE)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-def init_db():
-    con = db()
-    cur = con.cursor()
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS customers(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT,
-        mobile TEXT,
-        length TEXT,
-        chest TEXT,
-        waist TEXT,
-        shoulder TEXT,
-        sleeve TEXT,
-        collar TEXT,
-        poncha TEXT,
-        batton TEXT,
-        packet TEXT,
-        zip TEXT,
-        shalwar TEXT,
-        ghara TEXT,
-        amount TEXT,
-        note TEXT,
-        created_at TEXT
-    )
-    """)
-
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS licenses(
-        license TEXT PRIMARY KEY,
-        name TEXT,
-        status TEXT,
-        last_login TEXT,
-        last_ip TEXT
-    )
-    """)
 
     con.commit()
     con.close()
 
 init_db()
 
-# ================= BACKUP =================
-def backup():
-    if not os.path.exists("backup"):
-        os.mkdir("backup")
-    shutil.copy(DB_FILE, f"backup/data_{datetime.now().strftime('%Y%m%d_%H%M')}.db")
+# =========================
+# STYLE
+# =========================
+STYLE = """
+<style>
+body{font-family:Arial;background:#eef2f7}
+.container{width:1000px;margin:auto;padding:20px}
+.card{background:#fff;padding:15px;margin-bottom:15px;border-radius:8px;box-shadow:0 0 10px #ccc}
+h2{color:#0d6efd}
+input{padding:6px;width:48%;margin:4px}
+button{padding:8px 15px;background:#0d6efd;color:white;border:none;border-radius:4px}
+table{width:100%;border-collapse:collapse}
+th,td{border:1px solid #ccc;padding:6px}
+th{background:#0d6efd;color:white}
+a{text-decoration:none;color:red}
+.back{background:#6c757d}
+</style>
+"""
 
-# ================= LICENSE =================
-def valid_license(code):
-    con = db()
+# =========================
+# LICENSE CHECK
+# =========================
+def valid_license(key):
+    con = sqlite3.connect(DB)
     cur = con.cursor()
-    cur.execute("SELECT * FROM licenses WHERE license=? AND status='active'", (code,))
-    ok = cur.fetchone()
+    cur.execute("SELECT active FROM licenses WHERE license_key=?", (key,))
+    row = cur.fetchone()
     con.close()
-    return ok
+    return row and row[0] == 1
 
-def update_license(code, ip):
-    con = db()
-    con.execute("UPDATE licenses SET last_login=?, last_ip=? WHERE license=?",
-                (datetime.now().strftime("%Y-%m-%d %H:%M"), ip, code))
-    con.commit()
-    con.close()
-
-# ================= DEMO LICENSE =================
-def demo():
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT * FROM licenses WHERE license='DEMO123'")
-    if not cur.fetchone():
-        con.execute("INSERT INTO licenses VALUES (?,?,?,?,?)",
-                    ("DEMO123", "Demo Tailor", "active", "", ""))
-        con.commit()
-    con.close()
-
-demo()
-
-# ================= LOGIN =================
+# =========================
+# LICENSE LOGIN (USER)
+# =========================
 @app.route("/", methods=["GET","POST"])
-def login():
+def license_login():
     if request.method == "POST":
-        code = request.form["license"]
-        if valid_license(code):
-            session["license"] = code
-            update_license(code, request.remote_addr)
-            return redirect("/dashboard")
-        return "<h3 style='color:red'>Invalid License</h3>"
+        key = request.form["key"]
+        if valid_license(key):
+            session["license_key"] = key
+            return redirect("/user")
+        return "❌ Invalid or Deactivated License"
 
-    return """
-    <h2>Smart Tailor Login</h2>
+    return render_template_string(STYLE + """
+    <div class="container card">
+    <h2>License Activation</h2>
     <form method="post">
-      <input name="license" placeholder="Enter License" required>
-      <button>Login</button>
+    <input name="key" placeholder="Enter License Key" required>
+    <button>Activate</button>
     </form>
-    """
+    </div>
+    """)
 
-# ================= DASHBOARD =================
-@app.route("/dashboard")
-def dashboard():
-    if "license" not in session:
-        return redirect("/")
-    return """
-    <h2>Add Customer</h2>
-    <form method="post" action="/add">
-      Name <input name="name" required><br>
-      Mobile <input name="mobile" required><br>
-      Length <input name="length"><br>
-      Chest <input name="chest"><br>
-      Waist <input name="waist"><br>
-      Shoulder <input name="shoulder"><br>
-      Sleeve <input name="sleeve"><br>
-      Collar <input name="collar"><br>
-      Poncha <input name="poncha"><br>
-      Batton <input name="batton"><br>
-      Packet <input name="packet"><br>
-      Zip <input name="zip"><br>
-      Shalwar <input name="shalwar"><br>
-      Ghara <input name="ghara"><br>
-      Amount <input name="amount"><br>
-      Note <input name="note"><br><br>
-      <button>Save</button>
-    </form>
-
-    <h3>Search</h3>
-    <form method="get" action="/search">
-      <input name="q">
-      <button>Search</button>
-    </form>
-
-    <br>
-    <a href="/customers">View All</a> |
-    <a href="/logout">Logout</a>
-    """
-
-# ================= ADD CUSTOMER =================
-@app.route("/add", methods=["POST"])
-def add():
-    if "license" not in session:
+# =========================
+# USER PANEL
+# =========================
+@app.route("/user", methods=["GET","POST"])
+def user():
+    if "license_key" not in session:
         return redirect("/")
 
-    con = db()
-    con.execute("""
-    INSERT INTO customers VALUES
-    (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-    """, (
-        request.form["name"],
-        request.form["mobile"],
-        request.form.get("length"),
-        request.form.get("chest"),
-        request.form.get("waist"),
-        request.form.get("shoulder"),
-        request.form.get("sleeve"),
-        request.form.get("collar"),
-        request.form.get("poncha"),
-        request.form.get("batton"),
-        request.form.get("packet"),
-        request.form.get("zip"),
-        request.form.get("shalwar"),
-        request.form.get("ghara"),
-        request.form.get("amount"),
-        request.form.get("note"),
-        datetime.now().strftime("%Y-%m-%d %H:%M")
-    ))
-    con.commit()
-    con.close()
-    backup()
-    return redirect("/dashboard")
+    if request.method == "POST":
+        f = request.form
+        con = sqlite3.connect(DB)
+        con.execute("""
+        INSERT INTO customers VALUES
+        (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        """, (
+            session["license_key"], f["name"], f["phone"],
+            f["length"], f["chest"], f["waist"], f["shoulder"], f["sleeve"],
+            f["side_pocket"], f["shalwar_pocket"], f["cuff"], f["collar"],
+            f["shalwar_length"], f["zip"], f["poncha"],
+            f["note"], datetime.now().strftime("%d-%m-%Y")
+        ))
+        con.commit()
+        con.close()
 
-# ================= SEARCH =================
-@app.route("/search")
-def search():
-    if "license" not in session:
+    return render_template_string(STYLE + """
+    <div class="container">
+    <h2>User Measurement</h2>
+    <a href="/view">View Records</a>
+    <form method="post" class="card">
+    """ + "".join([
+        f'<input name="{x}" placeholder="{x.replace("_"," ").title()}">'
+        for x in [
+            "name","phone","length","chest","waist","shoulder","sleeve",
+            "side_pocket","shalwar_pocket","cuff","collar",
+            "shalwar_length","zip","poncha","note"
+        ]
+    ]) + """
+    <br><button>Save</button>
+    </form>
+    </div>
+    """)
+
+# =========================
+# VIEW RECORDS
+# =========================
+@app.route("/view")
+def view():
+    if "license_key" not in session:
         return redirect("/")
 
     q = request.args.get("q","")
-    con = db()
-    rows = con.execute("SELECT * FROM customers WHERE name LIKE ? OR mobile LIKE ?",
-                       (f"%{q}%", f"%{q}%")).fetchall()
+
+    con = sqlite3.connect(DB)
+    cur = con.cursor()
+
+    if q:
+        cur.execute("""
+        SELECT * FROM customers
+        WHERE license_key=?
+        AND (name LIKE ? OR phone LIKE ?)
+        ORDER BY id DESC
+        """, (
+            session["license_key"],
+            "%"+q+"%",
+            "%"+q+"%"
+        ))
+    else:
+        cur.execute("""
+        SELECT * FROM customers
+        WHERE license_key=?
+        ORDER BY id DESC
+        """, (session["license_key"],))
+
+    rows = cur.fetchall()
     con.close()
 
-    out = "<h2>Results</h2>"
-    for r in rows:
-        out += f"<pre>{dict(r)}</pre><hr>"
-    out += "<a href='/dashboard'>Back</a>"
-    return out
+    return render_template_string(STYLE + """
+    <div class="container">
+    <h2>Customer Records</h2>
 
-# ================= LIST =================
-@app.route("/customers")
-def customers():
-    if "license" not in session:
-        return redirect("/")
+    <form method="get">
+        <input name="q" placeholder="Search name or phone" value="{{request.args.get('q','')}}">
+        <button>Search</button>
+    </form>
 
-    con = db()
-    rows = con.execute("SELECT * FROM customers ORDER BY id DESC").fetchall()
-    con.close()
+    <table>
+    <tr>
+    <th>Name</th><th>Phone</th><th>Date</th>
+    <th>Length</th><th>Chest</th><th>Waist</th>
+    <th>Shoulder</th><th>Sleeve</th>
+    <th>Side Pocket</th><th>Shalwar Pocket</th>
+    <th>Cuff</th><th>Collar</th>
+    <th>Shalwar Length</th><th>Zip</th>
+    <th>Poncha</th><th>Note</th>
+    </tr>
 
-    out = "<h2>All Customers</h2>"
-    for r in rows:
-        out += f"<pre>{dict(r)}</pre><hr>"
-    return out
+    {% for r in rows %}
+    <tr>
+    <td>{{r[2]}}</td>
+    <td>{{r[3]}}</td>
+    <td>{{r[18]}}</td>
+    <td>{{r[4]}}</td>
+    <td>{{r[5]}}</td>
+    <td>{{r[6]}}</td>
+    <td>{{r[7]}}</td>
+    <td>{{r[8]}}</td>
+    <td>{{r[9]}}</td>
+    <td>{{r[10]}}</td>
+    <td>{{r[11]}}</td>
+    <td>{{r[12]}}</td>
+    <td>{{r[13]}}</td>
+    <td>{{r[14]}}</td>
+    <td>{{r[15]}}</td>
+    <td>{{r[16]}}</td>
+    </tr>
+    {% endfor %}
+    </table>
 
-# ================= LOGOUT =================
-@app.route("/logout")
-def logout():
-    session.clear()
-    return redirect("/")
-
-# ================= ADMIN =================
-@app.route("/admin-login", methods=["GET","POST"])
-def admin_login():
+    <br>
+    <a href="/user"><button class="back">⬅ Back</button></a>
+    </div>
+    """, rows=rows)
+# =========================
+# ADMIN LOGIN
+# =========================
+@app.route("/admin", methods=["GET","POST"])
+def admin():
     if request.method == "POST":
         if request.form["password"] == ADMIN_PASSWORD:
             session["admin"] = True
-            return redirect("/admin")
-    return "<form method='post'><input name='password'><button>Login</button></form>"
 
-@app.route("/admin")
-def admin():
     if not session.get("admin"):
-        return redirect("/admin-login")
-    con = db()
-    rows = con.execute("SELECT * FROM licenses").fetchall()
+        return render_template_string(STYLE + """
+        <div class="container card">
+        <h2>Admin Login</h2>
+        <form method="post">
+        <input type="password" name="password" placeholder="Admin Password">
+        <button>Login</button>
+        </form>
+        </div>
+        """)
+
+    con = sqlite3.connect(DB)
+    licenses = con.execute("SELECT * FROM licenses").fetchall()
     con.close()
 
-    out = "<h2>Admin Panel</h2>"
-    for r in rows:
-        out += f"{r['license']} | {r['status']} | {r['last_login']}<br>"
-    out += """
-    <h3>Add License</h3>
-    <form method='post' action='/admin-add'>
-      <input name='license'>
-      <input name='name'>
-      <button>Add</button>
-    </form>
-    """
-    return out
+    return render_template_string(STYLE + """
+    <div class="container">
+    <h2>Admin Dashboard</h2>
 
-@app.route("/admin-add", methods=["POST"])
-def admin_add():
+    <form method="post" action="/add-license" class="card">
+        <input name="tailor" placeholder="Tailor Name" required>
+        <input name="key" placeholder="License Key" required>
+        <button>Add License</button>
+    </form>
+
+    <table>
+    <tr><th>Tailor</th><th>License</th><th>Status</th><th>Action</th></tr>
+    {% for l in licenses %}
+    <tr>
+        <td>{{l[1]}}</td>
+        <td>{{l[2]}}</td>
+        <td>{{"Active" if l[3] else "Inactive"}}</td>
+        <td>
+            <a href="/toggle/{{l[0]}}">Toggle</a> |
+            <a href="/delete-license/{{l[0]}}">Delete</a>
+        </td>
+    </tr>
+    {% endfor %}
+    </table>
+    </div>
+    """, licenses=licenses)
+
+@app.route("/add-license", methods=["POST"])
+def add_license():
     if not session.get("admin"):
-        return redirect("/admin-login")
-    con = db()
-    con.execute("INSERT OR REPLACE INTO licenses VALUES (?,?,?,?,?)",
-                (request.form["license"], request.form["name"], "active", "", ""))
+        return redirect("/admin")
+    con = sqlite3.connect(DB)
+    con.execute(
+        "INSERT INTO licenses(tailor_name,license_key,active) VALUES(?,?,1)",
+        (request.form["tailor"], request.form["key"])
+    )
     con.commit()
     con.close()
     return redirect("/admin")
 
-# ================= RUN =================
+@app.route("/toggle/<id>")
+def toggle(id):
+    if not session.get("admin"):
+        return redirect("/admin")
+    con = sqlite3.connect(DB)
+    con.execute("UPDATE licenses SET active = NOT active WHERE id=?", (id,))
+    con.commit()
+    con.close()
+    return redirect("/admin")
+
+@app.route("/delete-license/<id>")
+def delete_license(id):
+    if not session.get("admin"):
+        return redirect("/admin")
+    con = sqlite3.connect(DB)
+    con.execute("DELETE FROM licenses WHERE id=?", (id,))
+    con.commit()
+    con.close()
+    return redirect("/admin")
+
+# =========================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
+    app.run(debug=True)
