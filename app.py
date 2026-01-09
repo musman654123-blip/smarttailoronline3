@@ -1,7 +1,6 @@
-from flask import Flask, request, redirect, session, render_template_string, abort
+from flask import Flask, request, redirect, session, render_template_string
 import sqlite3
 from datetime import datetime
-import os
 
 app = Flask(__name__)
 app.secret_key = "SMARTTAILOR_SECRET"
@@ -12,41 +11,37 @@ ADMIN_PASSWORD = "admin123"
 # =========================
 # DATABASE INIT
 # =========================
-def db():
-    return sqlite3.connect(DB)
-
 def init_db():
-    con = db()
-    cur = con.cursor()
-
-    # License table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS license(
-        id INTEGER PRIMARY KEY,
+    con = sqlite3.connect(DB)
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS customers(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT,
+        phone TEXT,
+        length TEXT,
+        chest TEXT,
+        waist TEXT,
+        shoulder TEXT,
+        sleeve TEXT,
+        side_pocket TEXT,
+        shalwar_pocket TEXT,
+        cuff TEXT,
+        collar TEXT,
+        shalwar_length TEXT,
+        zip TEXT,
+        poncha TEXT,
+        note TEXT,
+        date TEXT
+    )
+    """)
+    con.execute("""
+    CREATE TABLE IF NOT EXISTS licenses(
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        tailor_name TEXT,
+        key TEXT,
         active INTEGER
     )
     """)
-
-    # Customers table
-    cur.execute("""
-    CREATE TABLE IF NOT EXISTS customers(
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT, phone TEXT,
-        length TEXT, chest TEXT, waist TEXT,
-        shoulder TEXT, sleeve TEXT,
-        side_pocket TEXT, shalwar_pocket TEXT,
-        cuff TEXT, collar TEXT,
-        shalwar_length TEXT, zip TEXT, poncha TEXT,
-        note TEXT, date TEXT
-    )
-    """)
-
-    # Default license row
-    cur.execute("SELECT * FROM license")
-    if not cur.fetchone():
-        cur.execute("INSERT INTO license VALUES (1, 0)")
-
-    con.commit()
     con.close()
 
 init_db()
@@ -57,52 +52,44 @@ init_db()
 STYLE = """
 <style>
 body{font-family:Arial;background:#eef2f7}
-.container{width:1000px;margin:auto}
+.container{width:900px;margin:auto}
 .card{background:white;padding:15px;margin:10px 0;border-radius:8px;box-shadow:0 0 10px #ccc}
 h2{color:#0d6efd}
-input,textarea{padding:6px;width:48%;margin:4px}
+input,select{padding:6px;width:48%;margin:4px}
 button{padding:8px 15px;background:#0d6efd;color:white;border:none;border-radius:4px}
-a{text-decoration:none;margin-right:10px}
-.top{display:flex;justify-content:space-between}
-table{width:100%;border-collapse:collapse}
-td,th{border:1px solid #ccc;padding:6px;text-align:left}
+a{color:red;text-decoration:none}
+.top{display:flex;justify-content:space-between;align-items:center}
+.back{margin-top:10px;display:inline-block}
 </style>
 """
 
 # =========================
-# LICENSE CHECK
+# LICENSE CHECK DECORATOR
 # =========================
-def license_active():
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT active FROM license WHERE id=1")
-    status = cur.fetchone()[0]
-    con.close()
-    return status == 1
-
-# =========================
-# HOME
-# =========================
-@app.route("/")
-def home():
-    if not license_active():
-        return render_template_string(STYLE + """
-        <div class="container card">
-        <h2>License Not Activated</h2>
-        <p>Please contact admin.</p>
-        <a href="/admin">Admin Login</a>
-        </div>
-        """)
-    return redirect("/user")
+def license_required(func):
+    def wrapper(*args, **kwargs):
+        con = sqlite3.connect(DB)
+        cur = con.cursor()
+        cur.execute("SELECT COUNT(*) FROM licenses WHERE active=1")
+        active_count = cur.fetchone()[0]
+        con.close()
+        if active_count == 0:
+            return render_template_string(STYLE + """
+            <div class="container card">
+            <h2>License Not Activated</h2>
+            <p>Please contact admin.</p>
+            </div>
+            """)
+        return func(*args, **kwargs)
+    wrapper.__name__ = func.__name__
+    return wrapper
 
 # =========================
 # USER PANEL
 # =========================
-@app.route("/user", methods=["GET","POST"])
+@app.route("/", methods=["GET","POST"])
+@license_required
 def user():
-    if not license_active():
-        return redirect("/")
-
     if request.method == "POST":
         fields = [
             "name","phone","length","chest","waist","shoulder","sleeve",
@@ -112,54 +99,45 @@ def user():
         data = [request.form.get(f) for f in fields]
         data.append(datetime.now().strftime("%d-%m-%Y"))
 
-        con = db()
+        con = sqlite3.connect(DB)
         con.execute("""
-        INSERT INTO customers VALUES
-        (NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+        INSERT INTO customers VALUES(
+        NULL,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         """, data)
         con.commit()
         con.close()
+        return redirect("/list")
 
     return render_template_string(STYLE + """
     <div class="container">
-    <div class="top">
-        <h2>User Panel</h2>
-        <div>
-            <a href="/view">View</a>
-            <a href="/logout">Logout</a>
-        </div>
-    </div>
-
+    <h2>User Panel - Add Measurement</h2>
     <form method="post" class="card">
-    """ + "".join([
-        f'<input name="{f}" placeholder="{f.replace("_"," ").title()}">'
-        for f in [
-            "name","phone","length","chest","waist","shoulder","sleeve",
-            "side_pocket","shalwar_pocket","cuff","collar",
-            "shalwar_length","zip","poncha"
-        ]
-    ]) + """
-    <textarea name="note" placeholder="Note" style="width:98%"></textarea><br>
-    <button>Save</button>
+    """ + "".join([f'<input name="{f}" placeholder="{f.replace("_"," ").title()}">' for f in [
+        "name","phone","length","chest","waist","shoulder","sleeve",
+        "side_pocket","shalwar_pocket","cuff","collar",
+        "shalwar_length","zip","poncha","note"
+    ]]) + """
+    <br><button>Save Measurement</button>
     </form>
+    <a class="back" href="/list">View Records</a>
     </div>
     """)
 
 # =========================
 # VIEW + SEARCH
 # =========================
-@app.route("/view")
-def view():
-    if not license_active():
-        return redirect("/")
-
+@app.route("/list")
+@license_required
+def list_data():
     q = request.args.get("q","")
-    con = db()
+    con = sqlite3.connect(DB)
     cur = con.cursor()
+
     if q:
-        cur.execute("SELECT * FROM customers WHERE name LIKE ? OR phone LIKE ?",('%'+q+'%','%'+q+'%'))
+        cur.execute("SELECT * FROM customers WHERE name LIKE ?",('%'+q+'%',))
     else:
         cur.execute("SELECT * FROM customers ORDER BY id DESC")
+
     rows = cur.fetchall()
     con.close()
 
@@ -167,54 +145,24 @@ def view():
     <div class="container">
     <h2>Customer Records</h2>
     <form>
-        <input name="q" placeholder="Search name or phone">
+        <input name="q" placeholder="Search by name">
         <button>Search</button>
-        <a href="/user">Back</a>
     </form>
 
-    <table>
-    <tr>
-        <th>Name</th><th>Phone</th><th>Date</th><th>Action</th>
-    </tr>
     {% for r in rows %}
-    <tr>
-        <td>{{r[1]}}</td>
-        <td>{{r[2]}}</td>
-        <td>{{r[16]}}</td>
-        <td><a href="/print/{{r[0]}}">Print</a></td>
-    </tr>
+    <div class="card">
+    <b>{{r[1]}}</b> | {{r[2]}} | {{r[16]}}<br>
+    Length {{r[3]}} | Chest {{r[4]}} | Waist {{r[5]}}<br>
+    Shoulder {{r[6]}} | Sleeve {{r[7]}}<br>
+    Side Pocket {{r[8]}} | Shalwar Pocket {{r[9]}}<br>
+    Cuff {{r[10]}} | Collar {{r[11]}}<br>
+    Shalwar Length {{r[12]}} | Zip {{r[13]}} | Poncha {{r[14]}}<br>
+    Note {{r[15]}}<br>
+    </div>
     {% endfor %}
-    </table>
+    <a class="back" href="/">Back to Add Measurement</a>
     </div>
     """, rows=rows)
-
-# =========================
-# PRINT
-# =========================
-@app.route("/print/<int:id>")
-def print_view(id):
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT * FROM customers WHERE id=?", (id,))
-    r = cur.fetchone()
-    con.close()
-    if not r:
-        abort(404)
-
-    return render_template_string(STYLE + """
-    <div class="container card">
-    <h2>{{r[1]}}</h2>
-    <p>Phone: {{r[2]}}</p>
-    <p>Length {{r[3]}}, Chest {{r[4]}}, Waist {{r[5]}}</p>
-    <p>Shoulder {{r[6]}}, Sleeve {{r[7]}}</p>
-    <p>Side Pocket {{r[8]}}, Shalwar Pocket {{r[9]}}</p>
-    <p>Cuff {{r[10]}}, Collar {{r[11]}}</p>
-    <p>Shalwar Length {{r[12]}}, Zip {{r[13]}}, Poncha {{r[14]}}</p>
-    <p>Note {{r[15]}}</p>
-    <button onclick="window.print()">Print</button>
-    <a href="/view">Back</a>
-    </div>
-    """, r=r)
 
 # =========================
 # ADMIN PANEL
@@ -230,38 +178,75 @@ def admin():
         <div class="container card">
         <h2>Admin Login</h2>
         <form method="post">
-        <input type="password" name="password">
+        <input type="password" name="password" placeholder="Password" required>
         <button>Login</button>
         </form>
         </div>
         """)
 
-    con = db()
-    cur = con.cursor()
-    cur.execute("SELECT active FROM license WHERE id=1")
-    active = cur.fetchone()[0]
-    cur.execute("SELECT COUNT(*) FROM customers")
-    total = cur.fetchone()[0]
+    con = sqlite3.connect(DB)
+    rows = con.execute("SELECT * FROM licenses").fetchall()
+    total_customers = con.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
     con.close()
 
     return render_template_string(STYLE + """
     <div class="container">
     <h2>Admin Dashboard</h2>
-    <p>License Status: <b>{{'Active' if active else 'Inactive'}}</b></p>
-    <p>Total Customers: {{total}}</p>
-
-    <a href="/toggle">Toggle License</a>
-    <a href="/logout">Logout</a>
+    <p>Total Customers: {{total_customers}}</p>
+    <h3>Licenses</h3>
+    <form method="post" action="/add_license">
+        <input name="tailor_name" placeholder="Tailor Name" required>
+        <input name="key" placeholder="License Key" required>
+        <select name="active">
+            <option value="1">Active</option>
+            <option value="0">Inactive</option>
+        </select>
+        <button>Add License</button>
+    </form>
+    {% for r in rows %}
+    <div class="card">
+        {{r[1]}} | {{r[2]}} | Status: {% if r[3]==1 %}Active{% else %}Inactive{% endif %}
+        <a href="/delete_license/{{r[0]}}">❌ Remove</a>
+        <a href="/toggle_license/{{r[0]}}">Toggle Status</a>
     </div>
-    """, active=active, total=total)
+    {% endfor %}
+    <a class="back" href="/logout">Logout</a>
+    </div>
+    """, rows=rows,total_customers=total_customers)
 
-@app.route("/toggle")
-def toggle():
+@app.route("/add_license", methods=["POST"])
+def add_license():
     if not session.get("admin"):
         return redirect("/admin")
-    con = db()
+    tailor_name = request.form.get("tailor_name")
+    key = request.form.get("key")
+    active = int(request.form.get("active",0))
+    con = sqlite3.connect(DB)
+    con.execute("INSERT INTO licenses VALUES(NULL,?,?,?)",(tailor_name,key,active))
+    con.commit()
+    con.close()
+    return redirect("/admin")
+
+@app.route("/delete_license/<id>")
+def delete_license(id):
+    if not session.get("admin"):
+        return redirect("/admin")
+    con = sqlite3.connect(DB)
+    con.execute("DELETE FROM licenses WHERE id=?",(id,))
+    con.commit()
+    con.close()
+    return redirect("/admin")
+
+@app.route("/toggle_license/<id>")
+def toggle_license(id):
+    if not session.get("admin"):
+        return redirect("/admin")
+    con = sqlite3.connect(DB)
     cur = con.cursor()
-    cur.execute("UPDATE license SET active = NOT active WHERE id=1")
+    cur.execute("SELECT active FROM licenses WHERE id=?",(id,))
+    status = cur.fetchone()[0]
+    new_status = 0 if status==1 else 1
+    con.execute("UPDATE licenses SET active=? WHERE id=?",(new_status,id))
     con.commit()
     con.close()
     return redirect("/admin")
@@ -269,7 +254,8 @@ def toggle():
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect("/")
+    return redirect("/admin")
 
+# =========================
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000)
