@@ -1,4 +1,4 @@
-from flask import Flask, request, redirect, session, render_template_string
+from flask import Flask, request, redirect, session, render_template_string, url_for
 import sqlite3
 from datetime import datetime
 
@@ -38,8 +38,8 @@ def init_db():
     CREATE TABLE IF NOT EXISTS licenses(
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         tailor_name TEXT,
-        key TEXT,
-        active INTEGER
+        license_key TEXT,
+        active INTEGER DEFAULT 0
     )
     """)
     con.close()
@@ -55,9 +55,9 @@ body{font-family:Arial;background:#eef2f7}
 .container{width:900px;margin:auto}
 .card{background:white;padding:15px;margin:10px 0;border-radius:8px;box-shadow:0 0 10px #ccc}
 h2{color:#0d6efd}
-input,select{padding:6px;width:48%;margin:4px}
-button{padding:8px 15px;background:#0d6efd;color:white;border:none;border-radius:4px}
-a{color:red;text-decoration:none}
+input{padding:6px;width:48%;margin:4px}
+button{padding:8px 15px;background:#0d6efd;color:white;border:none;border-radius:4px;cursor:pointer}
+a{color:red;text-decoration:none;margin-left:10px}
 .top{display:flex;justify-content:space-between;align-items:center}
 .back{margin-top:10px;display:inline-block}
 </style>
@@ -66,28 +66,55 @@ a{color:red;text-decoration:none}
 # =========================
 # LICENSE CHECK DECORATOR
 # =========================
-def license_required(func):
-    def wrapper(*args, **kwargs):
+def license_required(f):
+    def wrap(*args, **kwargs):
+        if not session.get("license_active"):
+            return redirect("/license")
+        return f(*args, **kwargs)
+    wrap.__name__ = f.__name__
+    return wrap
+
+# =========================
+# LICENSE PAGE
+# =========================
+@app.route("/license", methods=["GET", "POST"])
+def license_page():
+    if request.method == "POST":
+        key = request.form.get("key")
         con = sqlite3.connect(DB)
         cur = con.cursor()
-        cur.execute("SELECT COUNT(*) FROM licenses WHERE active=1")
-        active_count = cur.fetchone()[0]
+        cur.execute("SELECT * FROM licenses WHERE license_key=? AND active=1", (key,))
+        row = cur.fetchone()
         con.close()
-        if active_count == 0:
+        if row:
+            session["license_active"] = True
+            session["tailor_name"] = row[1]
+            return redirect("/user")
+        else:
             return render_template_string(STYLE + """
             <div class="container card">
-            <h2>License Not Activated</h2>
-            <p>Please contact admin.</p>
+            <h2>License Activation</h2>
+            <p style="color:red">Invalid License Key</p>
+            <form method="post">
+            <input name="key" placeholder="Enter License Key" required>
+            <button>Activate</button>
+            </form>
             </div>
             """)
-        return func(*args, **kwargs)
-    wrapper.__name__ = func.__name__
-    return wrapper
+    return render_template_string(STYLE + """
+    <div class="container card">
+    <h2>License Activation</h2>
+    <form method="post">
+    <input name="key" placeholder="Enter License Key" required>
+    <button>Activate</button>
+    </form>
+    </div>
+    """)
 
 # =========================
 # USER PANEL
 # =========================
-@app.route("/", methods=["GET","POST"])
+@app.route("/user", methods=["GET","POST"])
 @license_required
 def user():
     if request.method == "POST":
@@ -106,38 +133,37 @@ def user():
         """, data)
         con.commit()
         con.close()
-        return redirect("/list")
+        return redirect("/view")
 
     return render_template_string(STYLE + """
     <div class="container">
-    <h2>User Panel - Add Measurement</h2>
+    <div class="top">
+        <h2>User Panel</h2>
+        <a href="/view">View Records</a>
+    </div>
     <form method="post" class="card">
     """ + "".join([f'<input name="{f}" placeholder="{f.replace("_"," ").title()}">' for f in [
         "name","phone","length","chest","waist","shoulder","sleeve",
         "side_pocket","shalwar_pocket","cuff","collar",
-        "shalwar_length","zip","poncha","note"
-    ]]) + """
+        "shalwar_length","zip","poncha","note"]]) + """
     <br><button>Save Measurement</button>
     </form>
-    <a class="back" href="/list">View Records</a>
     </div>
     """)
 
 # =========================
 # VIEW + SEARCH
 # =========================
-@app.route("/list")
+@app.route("/view")
 @license_required
-def list_data():
+def view_records():
     q = request.args.get("q","")
     con = sqlite3.connect(DB)
     cur = con.cursor()
-
     if q:
         cur.execute("SELECT * FROM customers WHERE name LIKE ?",('%'+q+'%',))
     else:
         cur.execute("SELECT * FROM customers ORDER BY id DESC")
-
     rows = cur.fetchall()
     con.close()
 
@@ -148,7 +174,6 @@ def list_data():
         <input name="q" placeholder="Search by name">
         <button>Search</button>
     </form>
-
     {% for r in rows %}
     <div class="card">
     <b>{{r[1]}}</b> | {{r[2]}} | {{r[16]}}<br>
@@ -157,10 +182,10 @@ def list_data():
     Side Pocket {{r[8]}} | Shalwar Pocket {{r[9]}}<br>
     Cuff {{r[10]}} | Collar {{r[11]}}<br>
     Shalwar Length {{r[12]}} | Zip {{r[13]}} | Poncha {{r[14]}}<br>
-    Note {{r[15]}}<br>
+    Note {{r[15]}}
     </div>
     {% endfor %}
-    <a class="back" href="/">Back to Add Measurement</a>
+    <a class="back" href="/user">Back</a>
     </div>
     """, rows=rows)
 
@@ -169,8 +194,8 @@ def list_data():
 # =========================
 @app.route("/admin", methods=["GET","POST"])
 def admin():
-    if request.method == "POST":
-        if request.form.get("password") == ADMIN_PASSWORD:
+    if request.method == "POST" and not session.get("admin"):
+        if request.form["password"] == ADMIN_PASSWORD:
             session["admin"] = True
 
     if not session.get("admin"):
@@ -178,84 +203,72 @@ def admin():
         <div class="container card">
         <h2>Admin Login</h2>
         <form method="post">
-        <input type="password" name="password" placeholder="Password" required>
+        <input type="password" name="password">
         <button>Login</button>
         </form>
         </div>
         """)
 
+    # Admin actions: add/remove license
+    action = request.args.get("action")
+    key = request.args.get("key")
+    tailor_name = request.args.get("tailor")
     con = sqlite3.connect(DB)
-    rows = con.execute("SELECT * FROM licenses").fetchall()
-    total_customers = con.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
+    cur = con.cursor()
+    if action=="add" and key and tailor_name:
+        cur.execute("INSERT INTO licenses (tailor_name,license_key,active) VALUES (?,?,1)", (tailor_name,key))
+        con.commit()
+    if action=="remove" and key:
+        cur.execute("DELETE FROM licenses WHERE license_key=?", (key,))
+        con.commit()
+    if action=="toggle" and key:
+        cur.execute("SELECT active FROM licenses WHERE license_key=?", (key,))
+        row = cur.fetchone()
+        if row:
+            new_status = 0 if row[0]==1 else 1
+            cur.execute("UPDATE licenses SET active=? WHERE license_key=?", (new_status,key))
+            con.commit()
+    licenses = cur.execute("SELECT * FROM licenses").fetchall()
+    total_customers = cur.execute("SELECT COUNT(*) FROM customers").fetchone()[0]
     con.close()
 
     return render_template_string(STYLE + """
     <div class="container">
     <h2>Admin Dashboard</h2>
     <p>Total Customers: {{total_customers}}</p>
-    <h3>Licenses</h3>
-    <form method="post" action="/add_license">
-        <input name="tailor_name" placeholder="Tailor Name" required>
-        <input name="key" placeholder="License Key" required>
-        <select name="active">
-            <option value="1">Active</option>
-            <option value="0">Inactive</option>
-        </select>
-        <button>Add License</button>
-    </form>
-    {% for r in rows %}
-    <div class="card">
-        {{r[1]}} | {{r[2]}} | Status: {% if r[3]==1 %}Active{% else %}Inactive{% endif %}
-        <a href="/delete_license/{{r[0]}}">❌ Remove</a>
-        <a href="/toggle_license/{{r[0]}}">Toggle Status</a>
-    </div>
+    <table border="1" cellpadding="5" cellspacing="0">
+    <tr><th>Tailor</th><th>License Key</th><th>Active</th><th>Actions</th></tr>
+    {% for l in licenses %}
+    <tr>
+        <td>{{l[1]}}</td>
+        <td>{{l[2]}}</td>
+        <td>{{'✅' if l[3]==1 else '❌'}}</td>
+        <td>
+        <a href="/admin?action=toggle&key={{l[2]}}">Toggle</a> |
+        <a href="/admin?action=remove&key={{l[2]}}">Remove</a>
+        </td>
+    </tr>
     {% endfor %}
-    <a class="back" href="/logout">Logout</a>
+    </table>
+    <br>
+    <h3>Add New License</h3>
+    <form method="get">
+    Tailor Name: <input name="tailor" required>
+    License Key: <input name="key" required>
+    <button>Add License</button>
+    </form>
+    <br><a href="/logout">Logout</a>
     </div>
-    """, rows=rows,total_customers=total_customers)
+    """, licenses=licenses, total_customers=total_customers)
 
-@app.route("/add_license", methods=["POST"])
-def add_license():
-    if not session.get("admin"):
-        return redirect("/admin")
-    tailor_name = request.form.get("tailor_name")
-    key = request.form.get("key")
-    active = int(request.form.get("active",0))
-    con = sqlite3.connect(DB)
-    con.execute("INSERT INTO licenses VALUES(NULL,?,?,?)",(tailor_name,key,active))
-    con.commit()
-    con.close()
-    return redirect("/admin")
-
-@app.route("/delete_license/<id>")
-def delete_license(id):
-    if not session.get("admin"):
-        return redirect("/admin")
-    con = sqlite3.connect(DB)
-    con.execute("DELETE FROM licenses WHERE id=?",(id,))
-    con.commit()
-    con.close()
-    return redirect("/admin")
-
-@app.route("/toggle_license/<id>")
-def toggle_license(id):
-    if not session.get("admin"):
-        return redirect("/admin")
-    con = sqlite3.connect(DB)
-    cur = con.cursor()
-    cur.execute("SELECT active FROM licenses WHERE id=?",(id,))
-    status = cur.fetchone()[0]
-    new_status = 0 if status==1 else 1
-    con.execute("UPDATE licenses SET active=? WHERE id=?",(new_status,id))
-    con.commit()
-    con.close()
-    return redirect("/admin")
-
+# =========================
+# LOGOUT
+# =========================
 @app.route("/logout")
 def logout():
     session.clear()
-    return redirect("/admin")
+    return redirect("/license")
 
 # =========================
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run(debug=True)
